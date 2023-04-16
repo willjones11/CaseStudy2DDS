@@ -1,0 +1,255 @@
+---
+title: "CaseStudy2"
+author: "William Jones"
+date: "2023-04-08"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+#Downloading the Files needed for the Analysis 
+
+```{r}
+noattr = read.csv("D:/Github/MSDS_6306_Doing-Data-Science/Unit 14 and 15 Case Study 2/CaseStudy2CompSet No Attrition.csv")
+nosal = read.csv("D:/Github/MSDS_6306_Doing-Data-Science/Unit 14 and 15 Case Study 2/CaseStudy2CompSet No Salary.csv")
+case = read.csv("D:/Github/MSDS_6306_Doing-Data-Science/Unit 14 and 15 Case Study 2/CaseStudy2-data.csv")
+
+#noattr = read.csv("/Users/williamjones/Downloads/CaseStudy2CompSet No Attrition.csv")
+#nosal = read.csv("/Users/williamjones/Downloads/CaseStudy2CompSet No Salary.csv")
+#case = read.csv("/Users/williamjones/Downloads/CaseStudy2-data.csv")
+
+
+#Checking to see if there are a NA values in the columns
+
+colSums(is.na(case))
+colSums(is.na(nosal))
+```
+#Analysis of trends per job rol
+```{r}
+library(ggplot2)
+library(tidyverse)
+library(ggthemes)
+#job role breakdown 
+case %>% ggplot(aes(y=JobRole)) + geom_histogram(stat="count") +ggtitle("Job Roles") + theme_clean()
+#job role attrition
+case %>% ggplot(aes(x = Attrition)) + facet_wrap(~JobRole) + geom_histogram(stat="count") + ggtitle("Attrition per Job Role") +theme_clean()
+
+#job role salary
+case %>% ggplot(aes(x = MonthlyIncome, fill = JobRole)) + geom_boxplot()  + ggtitle("Salary Per Job Role")
+
+#Enviroment Satisfaction
+case %>% ggplot(aes(x=EnvironmentSatisfaction, fill = JobRole)) + geom_boxplot() +
+  ggtitle("Enviroment Satisfaction Distribution Per Job Role")
+
+#Gender
+case %>% ggplot(aes(y= JobRole, fill=Gender)) + geom_histogram(stat="count", position="dodge") + ggtitle("Gender Distribution Per Job Role")
+```
+
+#Intial Analysis of the data
+```{r}
+library(ggplot2)
+library(dplyr)
+library(ggthemes)
+#Distribution of the Attrition Rate
+case %>% ggplot(aes(x= Attrition), color = Attrition) + geom_bar(stat="count") + theme_bw() + ggtitle("Orginal Attrition Distribution")
+
+#Distibution of Salary
+case %>% ggplot(aes(x=MonthlyIncome)) + geom_histogram() + ggtitle("Original Case Data")
+```
+
+#Since there are no missing variables, I will check the columns to see which ones need to be dropped then convert catagorical variables to 
+#numeric for correlation
+```{r}
+library(reshape2)
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+#checking number of distinct values in columns 
+sapply(case, function(x) n_distinct(x))
+#droppinmg columns that have only one unique value
+case = subset(case, select = -c(10, 23, 28))
+#dropping columns
+noattr = subset(noattr, select = -c(9, 22, 27))
+#converting catagorical variables to factors
+ case[, c(3, 4, 6, 9, 12, 16, 18, 22)] <- lapply(case[, c(3, 4, 6, 9, 12, 16, 18, 22)], as.factor)
+#copy dataframe with different memory address
+case_f = data.frame(case)
+noattr[, c(3, 5, 8, 11, 15, 17, 21)] <- lapply(noattr[, c(3, 5, 8, 11, 15, 17, 21)], as.factor)
+noattr_f = data.frame(noattr)
+#converting factor columns to numeric 
+
+case[,  c(3, 4, 6, 9, 12, 16, 18, 22)] <- sapply(case[,  c(3, 4, 6, 9, 12, 16, 18, 22)], unclass)
+noattr[, c(3, 5, 8, 11, 15, 17, 21)] <- sapply(noattr[, c(3, 5, 8, 11, 15, 17, 21)], unclass)
+#correlation matrix 
+cormat <- round(cor(case), 2)
+melted_cormat <- melt(cormat)
+ggplot(data = melted_cormat, aes(x=Var1, y=Var2, fill=value)) + geom_tile() + theme(axis.text.x = element_text(angle=90, vjust=0.5, hjust=1))
+```
+
+
+The distribution of the Attrition is heavily un balanced. To help in classification algorithms Oversampling needs to be done to balance the dataset without losing any observations.
+```{r}
+set.seed(12345) 
+#subsetting miniority class
+case_minority <- case_f %>% filter(Attrition == "Yes")
+maj <- nrow(case_f[case_f$Attrition == 'No', ])
+min <- nrow(case_f[case_f$Attrition == 'Yes', ])
+#oversampling the minority class to create a somewhat balanced dataset
+set = maj-min-5
+for (i in 1:set){
+  case_f[nrow(case_f) + 1,] <- sample_n(case_minority, 1)
+}
+case_f %>% ggplot(aes(x=Attrition)) + geom_bar(stat="count") + theme_clean() + ggtitle("Case Data after Oversampling")
+
+```
+
+# Creating Knn model for prediction
+A power model to show the best k value to use for the model
+```{r}
+library(class)
+library(e1071)
+library(caret)
+library(ggplot2)
+library(dplyr)
+#creating dataframes for metrics
+accs = data.frame(accuracy = numeric(25), k = numeric(25))
+sens = data.frame(sensitivity = numeric(25), k = numeric(25))
+spec = data.frame(specificity = numeric(25), k = numeric(25))
+#changing model to numeric for knn
+case_n = data.frame(case_f)
+case_n[,  c(3, 4, 6, 9, 12, 16, 18, 22)] <- sapply(case_n[,  c(3, 4, 6, 9, 12, 16, 18, 22)], unclass)
+
+#Figuring out which K value to us 
+for(i in 1:25)
+{
+  #Knn cross validation model 
+  classifications = knn.cv(case_n[,-3],case_n$Attrition, prob = TRUE, k = i, use.all = FALSE)
+  #creating a table
+  table(case_n$Attrition,classifications)
+  #Confusion Matrix
+  CM = confusionMatrix(table(case_n$Attrition,classifications))
+  
+  #Adding the metrics to their perspective dataframes
+  accs$accuracy[i] = CM$overall[1]
+  sens$sensitivity[i] = CM$byClass[1]
+  spec$specificity[i] = CM$byClass[2]
+  #adding k value to dataframes
+  accs$k[i] = i
+  sens$k[i] = i
+  spec$k[i] = i
+}
+#Plotting the metrics
+ggplot() +
+  geom_line(data = accs, aes(k,accuracy,  colour ="Accuracy")) +
+  geom_line(data = sens ,aes(k,sensitivity,  colour ="Sensitivity")) +
+  geom_line(data = spec, aes(k,specificity, colour = "Specificity")) + 
+  ggtitle("Attrition Case Study") +
+  ylab("ratio") +
+  xlab("K") +
+  scale_color_manual(values = c("Accuracy" = "blue", "Sensitivity" = "red", "Specificity" = "purple")) +
+  labs(color = "Metric")
+
+```
+
+
+## Looking at the outputted matrix of the power model it seems that a K value around 1-10 would be the best K value for a model that has atleast 60% in specificity and Sensitivity
+## Running the knn model with the specified k value
+```{r}
+library(tidyr)
+library(caret)
+#sample size
+smpsize <- floor(0.8 * nrow(case_f))
+#partition 
+set.seed(123)
+ind <- sample(seq_len(nrow(case_f)), size = smpsize)
+train<- case_f[ind, ]
+test <- case_f[-ind, ]
+
+trctrl <- trainControl(method = "repeatedcv", number = 10, repeats = 3)
+set.seed(3333)
+
+knn_fit <- train(Attrition ~.,
+                 data = train,
+                 method = "knn",
+                 trControl=trctrl,
+                 preProcess = c("center", "scale"),
+                 tuneLength = 10)
+knn_fit
+#prediction on the test case
+pred <- predict(knn_fit, newdata= test)
+confusionMatrix(pred, test$Attrition)
+#prediction on no attr case
+noattr_f$Attrition <- predict(knn_fit, newdata = noattr_f)
+noattr_f %>% ggplot(aes(x = Attrition)) + geom_bar(stat="count") + ggtitle("Predicition Distributed of No Attr Case")
+#isolating the attrition and id
+ans <- noattr_f[c("ID", "Attrition")]
+#putting this to its own csv
+write.csv(ans, "D:/Downloads/Case2PredictionsJones Attrition.csv")
+```
+The model choose a k of 5 to be the best fit to predict the test case. Which predicted a somewhat normally distributed attrition of Nos and Yes.
+
+Now we will try to conduct a predictive model on trying to predict the monthly income. For this model we will try a regression model
+```{r}
+library(MASS)
+library(tidyr)
+library(car)
+#to combat the skewness of the response variable the log transformation is needed to make it normally distributed
+case %>% ggplot(aes(x=log(MonthlyIncome))) + geom_histogram() + ggtitle("Logged Case Data")
+#dropping columns with only one unique variable 
+nosal = subset(nosal, select = -c(10, 22, 27))
+#changing the columns to factors
+nosal[, c(3, 4, 6, 9, 12, 16, 18, 21 )] <- lapply(nosal[, c(3, 4, 6, 9, 12, 16, 18, 21 )], as.factor)
+#convert the factors to numeric
+nosal[, c(3, 4, 6, 9, 12, 16, 18, 21 )] <- sapply(nosal[, c(3, 4, 6, 9, 12, 16, 18, 21 )], unclass)
+#since the salary distribution is heavily skewed it needs to be transformed
+case_n %>% ggplot(aes(x=log(MonthlyIncome))) + geom_histogram() + ggtitle("Case Data After Logging Response Variable")
+#sample size
+smpsize <- floor(0.8 * nrow(case_n))
+#partition 
+set.seed(123)
+ind <- sample(seq_len(nrow(case_n)), size = smpsize)
+train<- case_n[ind, ]
+test <- case_n[-ind, ]
+#Using the no case numeric dataset to create a lm model
+full.model = lm(log(MonthlyIncome)~., data = train)
+#creating a stepwise model for parameter selection
+step.model <- stepAIC(full.model, direction = "both", 
+                      trace = FALSE)
+#summary
+summary(step.model)
+plot(step.model)
+#plotting the regression model
+avPlots(step.model)
+
+```
+Looking at the assumptions for the regression model the data seems to follow somewhat of a straight line, being independent of each other, and having somewhat equal variance.
+
+# making prediction and testing accuracy on the test set
+```{r}
+test$MonthlyIncome <- log(test$MonthlyIncome)
+prediction <- step.model %>% predict(test)
+#Model Performance
+RMSE(prediction, test$MonthlyIncome)
+R2(prediction, test$MonthlyIncome)
+
+```
+The models difference between the true vs predicted values is only about 1.2 which is great for our model, its adjusted r2 shows that about 86% of the data in the training set is explained by the model. 
+Using the found regression model we will now try to predict the test case with no salary
+```{r}
+#prediction
+pred <- step.model %>% predict(nosal)
+#convert to dataframe
+pred <- as.data.frame(pred)
+#rename column
+colnames(pred) <- c("MonthlyIncome")
+#add id column 
+pred$ID <- nosal$ID
+#transform the income back
+pred$MonthlyIncome <- exp(pred$MonthlyIncome)
+#create csv file
+write.csv(pred, "D:/Downloads/Case2PredictionsJones Salary.csv")
+
+```
